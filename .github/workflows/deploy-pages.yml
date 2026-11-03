@@ -1,0 +1,87 @@
+name: Deploy Forest Survival
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "index.html"
+      - "src/**"
+      - "assets/**"
+      - ".github/workflows/deploy-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out game files
+        uses: actions/checkout@v4
+
+      - name: Verify site files
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          import sys
+
+          class Scripts(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.sources = []
+
+              def handle_starttag(self, tag, attrs):
+                  if tag == "script":
+                      src = dict(attrs).get("src")
+                      if src:
+                          self.sources.append(src)
+
+          index = Path("index.html")
+          required = [index, Path("src"), Path("assets")]
+          missing = [str(path) for path in required if not path.exists()]
+          if index.exists():
+              parser = Scripts()
+              parser.feed(index.read_text(encoding="utf-8"))
+              missing += [src for src in parser.sources if not Path(src).is_file()]
+          if missing:
+              for path in missing:
+                  print(f"::error::Missing game file: {path}")
+              sys.exit(1)
+          print(f"Verified {len(parser.sources)} JavaScript files and game assets directory")
+          PY
+
+      - name: Prepare static site
+        run: |
+          mkdir -p _site
+          cp index.html _site/
+          cp -a src assets _site/
+          touch _site/.nojekyll
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
